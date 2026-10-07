@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>심박수 측정 실험 — 광혈류 데이터 수집</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap');
+
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #21262d;
+    --accent:   #58a6ff;
+    --pulse:    #ff6b6b;
+    --green:    #3fb950;
+    --yellow:   #d29922;
+    --text:     #e6edf3;
+    --muted:    #8b949e;
+    --mono:     'IBM Plex Mono', monospace;
+    --sans:     'IBM Plex Sans KR', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 600; letter-spacing: -.2px;
+  }
+  .logo-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--pulse);
+    animation: breathe 2s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: .4; transform: scale(.7); }
+  }
+  .logo-dot.active {
+    animation: beat .6s ease-in-out infinite;
+    background: var(--green);
+  }
+  @keyframes beat {
+    0%,100% { transform: scale(1); }
+    50%      { transform: scale(1.5); }
+  }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+  .status-badge {
+    font-family: var(--mono); font-size: 11px;
+    padding: 3px 10px; border-radius: 20px;
+    background: #1c2128; border: 1px solid var(--border);
+    color: var(--muted);
+    transition: all .3s;
+  }
+  .status-badge.connected {
+    border-color: var(--green); color: var(--green);
+    background: rgba(63,185,80,.08);
+  }
+  .status-badge.recording {
+    border-color: var(--pulse); color: var(--pulse);
+    background: rgba(255,107,107,.08);
+  }
+
+  /* ── Main layout ── */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    grid-template-rows: auto 1fr auto;
+    gap: 0;
+    max-width: 1400px;
+    width: 100%; margin: 0 auto;
+    padding: 20px;
+    gap: 16px;
+  }
+
+  /* ── Control Panel ── */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .panel-header {
+    padding: 12px 16px;
+    font-size: 11px; font-weight: 600;
+    color: var(--muted);
+    letter-spacing: .8px;
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+  }
+  .panel-body { padding: 16px; }
+
+  .control-col {
+    grid-column: 1;
+    grid-row: 1 / 4;
+    display: flex; flex-direction: column; gap: 16px;
+    align-self: start;
+    position: sticky; top: 70px;
+  }
+
+  /* ── Metric card ── */
+  .metric-card {
+    text-align: center;
+    padding: 20px 16px;
+  }
+  .metric-label {
+    font-size: 11px; color: var(--muted); letter-spacing: .6px;
+    margin-bottom: 8px; text-transform: uppercase;
+  }
+  .metric-value {
+    font-family: var(--mono); font-size: 52px; font-weight: 600;
+    color: var(--accent); line-height: 1;
+    transition: color .2s;
+  }
+  .metric-value.pulse-flash {
+    color: var(--pulse);
+  }
+  .metric-unit {
+    font-size: 13px; color: var(--muted); margin-top: 4px;
+  }
+  .metric-range {
+    margin-top: 14px;
+  }
+  .range-bar-bg {
+    height: 5px; background: var(--border); border-radius: 3px;
+    overflow: hidden; margin-bottom: 5px;
+  }
+  .range-bar-fill {
+    height: 100%; background: var(--accent);
+    border-radius: 3px; transition: width .15s;
+    width: 0%;
+  }
+  .range-labels {
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+  }
+
+  /* ── Stat grid ── */
+  .stat-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .stat-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .stat-item-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+  .stat-item-value { font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--text); }
+
+  /* ── Buttons ── */
+  .btn-group { display: flex; flex-direction: column; gap: 8px; }
+  .btn {
+    width: 100%; padding: 10px 16px;
+    border-radius: 8px; border: 1px solid var(--border);
+    font-family: var(--sans); font-size: 13px; font-weight: 500;
+    cursor: pointer; transition: all .15s;
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+  }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-primary {
+    background: var(--accent); color: #0d1117;
+    border-color: var(--accent);
+  }
+  .btn-primary:hover:not(:disabled) { background: #79bfff; }
+  .btn-danger {
+    background: rgba(255,107,107,.12); color: var(--pulse);
+    border-color: rgba(255,107,107,.3);
+  }
+  .btn-danger:hover:not(:disabled) { background: rgba(255,107,107,.2); }
+  .btn-ghost {
+    background: transparent; color: var(--muted);
+    border-color: var(--border);
+  }
+  .btn-ghost:hover:not(:disabled) { background: var(--border); color: var(--text); }
+
+  /* ── Serial config ── */
+  .config-row {
+    display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px;
+  }
+  .config-label { font-size: 11px; color: var(--muted); }
+  .config-input {
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); font-family: var(--mono); font-size: 12px;
+    padding: 7px 10px; border-radius: 6px; width: 100%;
+  }
+  .config-input:focus { outline: none; border-color: var(--accent); }
+
+  /* ── Chart area ── */
+  .chart-col {
+    grid-column: 2; grid-row: 1;
+    display: flex; flex-direction: column; gap: 0;
+  }
+
+  .chart-wrapper {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden;
+  }
+  .chart-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .chart-title { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .5px; }
+  .chart-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  canvas#chart {
+    display: block; width: 100%; height: 200px;
+    background: var(--bg);
+  }
+
+  /* ── Table area ── */
+  .table-col {
+    grid-column: 2; grid-row: 2;
+  }
+  .table-scroll {
+    max-height: 260px; overflow-y: auto;
+  }
+  .table-scroll::-webkit-scrollbar { width: 5px; }
+  .table-scroll::-webkit-scrollbar-track { background: transparent; }
+  .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  table {
+    width: 100%; border-collapse: collapse;
+    font-family: var(--mono); font-size: 12px;
+  }
+  thead th {
+    padding: 9px 14px; text-align: left;
+    font-size: 10px; color: var(--muted); letter-spacing: .6px;
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: var(--surface);
+    text-transform: uppercase;
+  }
+  tbody tr { border-bottom: 1px solid rgba(33,38,45,.6); transition: background .1s; }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+  tbody td { padding: 7px 14px; color: var(--text); }
+  tbody td.idx { color: var(--muted); }
+  tbody td.val { color: var(--accent); font-weight: 600; }
+  tbody td.new { animation: rowIn .3s ease; }
+  @keyframes rowIn {
+    from { opacity: 0; background: rgba(88,166,255,.08); }
+    to   { opacity: 1; background: transparent; }
+  }
+
+  /* ── Log ── */
+  .log-col { grid-column: 1 / 3; grid-row: 3; }
+  .log-body {
+    padding: 10px 14px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    max-height: 80px; overflow-y: auto;
+  }
+  .log-line { margin-bottom: 3px; }
+  .log-line.info  { color: var(--accent); }
+  .log-line.ok    { color: var(--green); }
+  .log-line.warn  { color: var(--yellow); }
+  .log-line.err   { color: var(--pulse); }
+
+  /* ── Responsive ── */
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; grid-template-rows: auto; padding: 12px; }
+    .control-col { grid-column: 1; grid-row: 1; position: static; }
+    .chart-col   { grid-column: 1; grid-row: 2; }
+    .table-col   { grid-column: 1; grid-row: 3; }
+    .log-col     { grid-column: 1; grid-row: 4; }
+    canvas#chart { height: 160px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot" id="logoDot"></div>
+    심박수 측정 실험 &nbsp;·&nbsp; 광혈류(PPG) 데이터 수집
+  </div>
+  <div class="header-right">
+    <span class="status-badge" id="statusBadge">연결 안 됨</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── 컨트롤 패널 ── -->
+  <div class="control-col">
+
+    <!-- 실시간 측정값 -->
+    <div class="panel">
+      <div class="panel-header">실시간 측정값</div>
+      <div class="panel-body metric-card">
+        <div class="metric-label">광혈류량 (PPG Raw)</div>
+        <div class="metric-value" id="liveValue">—</div>
+        <div class="metric-unit">ADC (0 – 1023)</div>
+        <div class="metric-range">
+          <div class="range-bar-bg">
+            <div class="range-bar-fill" id="rangeBar"></div>
+          </div>
+          <div class="range-labels"><span>400</span><span>600</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 통계 -->
+    <div class="panel">
+      <div class="panel-header">측정 통계</div>
+      <div class="panel-body">
+        <div class="stat-grid">
+          <div class="stat-item">
+            <div class="stat-item-label">총 수집 수</div>
+            <div class="stat-item-value" id="statCount">0</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-item-label">경과 시간</div>
+            <div class="stat-item-value" id="statTime">0.0 s</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-item-label">최솟값</div>
+            <div class="stat-item-value" id="statMin">—</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-item-label">최댓값</div>
+            <div class="stat-item-value" id="statMax">—</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-item-label">평균값</div>
+            <div class="stat-item-value" id="statAvg">—</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-item-label">표준편차</div>
+            <div class="stat-item-value" id="statStd">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 시리얼 설정 -->
+    <div class="panel">
+      <div class="panel-header">시리얼 설정</div>
+      <div class="panel-body">
+        <div class="config-row">
+          <span class="config-label">Baud Rate</span>
+          <select class="config-input" id="baudRate">
+            <option value="115200" selected>115200</option>
+            <option value="9600">9600</option>
+            <option value="57600">57600</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <span class="config-label">데이터 접두사 (prefix)</span>
+          <input class="config-input" id="prefix" value="SENSOR:" placeholder="SENSOR:">
+        </div>
+        <div class="config-row">
+          <span class="config-label">그래프 표시 포인트 수</span>
+          <input class="config-input" type="number" id="maxPoints" value="200" min="50" max="1000">
+        </div>
+        <div class="config-row">
+          <span class="config-label">Y축 고정 범위</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input class="config-input" type="number" id="yAxisMin" value="450" style="width:80px" placeholder="최솟값">
+            <span style="color:var(--muted);font-size:12px">~</span>
+            <input class="config-input" type="number" id="yAxisMax" value="600" style="width:80px" placeholder="최댓값">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 제어 버튼 -->
+    <div class="panel">
+      <div class="panel-header">데이터 수집 제어</div>
+      <div class="panel-body">
+        <div class="btn-group">
+          <button class="btn btn-primary" id="btnConnect">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            포트 연결
+          </button>
+          <button class="btn btn-danger" id="btnStop" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+            수집 중지
+          </button>
+          <button class="btn btn-ghost" id="btnClear" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+            데이터 초기화
+          </button>
+          <button class="btn btn-ghost" id="btnDownload" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            CSV 다운로드
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /control-col -->
+
+  <!-- ── 실시간 그래프 ── -->
+  <div class="chart-col">
+    <div class="chart-wrapper">
+      <div class="chart-header">
+        <span class="chart-title">실시간 광혈류(PPG) 파형</span>
+        <span class="chart-meta" id="chartMeta">대기 중...</span>
+      </div>
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+
+  <!-- ── 데이터 표 ── -->
+  <div class="table-col">
+    <div class="panel">
+      <div class="panel-header">수집 데이터 표</div>
+      <div class="table-scroll" id="tableScroll">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>시각 (hh:mm:ss.ms)</th>
+              <th>경과 시간 (s)</th>
+              <th>광혈류량 (ADC)</th>
+              <th>정규화 값</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody">
+            <tr>
+              <td colspan="5" style="text-align:center;color:var(--muted);padding:24px 0;font-family:var(--sans)">
+                포트를 연결하면 데이터가 자동으로 수집됩니다.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 로그 ── -->
+  <div class="log-col">
+    <div class="panel">
+      <div class="panel-header">시스템 로그</div>
+      <div class="log-body" id="logBody"></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ──────────────────────────────────────────────
+//  상태
+// ──────────────────────────────────────────────
+let port = null, reader = null, readLoopRunning = false;
+let recording = false;
+let data = [];          // {t, elapsed, raw, norm}
+let startTime = null;
+let minVal = Infinity, maxVal = -Infinity, sumVal = 0, sumSqVal = 0;
+let timerInterval = null;
+
+const SENSOR_MIN = 400, SENSOR_MAX = 600;
+
+// ──────────────────────────────────────────────
+//  DOM refs
+// ──────────────────────────────────────────────
+const btnConnect  = document.getElementById('btnConnect');
+const btnStop     = document.getElementById('btnStop');
+const btnClear    = document.getElementById('btnClear');
+const btnDownload = document.getElementById('btnDownload');
+const liveValue   = document.getElementById('liveValue');
+const rangeBar    = document.getElementById('rangeBar');
+const statusBadge = document.getElementById('statusBadge');
+const logoDot     = document.getElementById('logoDot');
+const tableBody   = document.getElementById('tableBody');
+const tableScroll = document.getElementById('tableScroll');
+const logBody     = document.getElementById('logBody');
+const chartMeta   = document.getElementById('chartMeta');
+
+// ──────────────────────────────────────────────
+//  로그 헬퍼
+// ──────────────────────────────────────────────
+function log(msg, type='info') {
+  const d = document.createElement('div');
+  d.className = `log-line ${type}`;
+  const now = new Date();
+  d.textContent = `[${now.toLocaleTimeString('ko-KR',{hour12:false})}.${String(now.getMilliseconds()).padStart(3,'0')}] ${msg}`;
+  logBody.appendChild(d);
+  logBody.scrollTop = logBody.scrollHeight;
+  // 최대 50줄
+  while (logBody.children.length > 50) logBody.removeChild(logBody.firstChild);
+}
+
+// ──────────────────────────────────────────────
+//  Canvas 실시간 그래프
+// ──────────────────────────────────────────────
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+let chartData = [];
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  canvas.width  = rect.width  * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  drawChart();
+}
+window.addEventListener('resize', resizeCanvas);
+setTimeout(resizeCanvas, 100);
+
+function drawChart() {
+  const W = canvas.width  / devicePixelRatio;
+  const H = canvas.height / devicePixelRatio;
+  ctx.clearRect(0, 0, W, H);
+
+  // 배경
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  const maxPts = parseInt(document.getElementById('maxPoints').value) || 200;
+  const disp = chartData.slice(-maxPts);
+
+  if (disp.length < 2) {
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '12px IBM Plex Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('데이터 수집 대기 중...', W/2, H/2);
+    return;
+  }
+
+  // Y 범위: 고정 (사용자 설정값 우선, 기본 300~700)
+  const yMin = parseInt(document.getElementById('yAxisMin').value) || 300;
+  const yMax = parseInt(document.getElementById('yAxisMax').value) || 700;
+
+  const PAD_L = 48, PAD_R = 16, PAD_T = 16, PAD_B = 28;
+  const gW = W - PAD_L - PAD_R;
+  const gH = H - PAD_T - PAD_B;
+
+  function toX(i) { return PAD_L + (i / (disp.length - 1)) * gW; }
+  function toY(v) { return PAD_T + (1 - (v - yMin) / (yMax - yMin)) * gH; }
+
+  // 그리드
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  const ySteps = 4;
+  for (let i = 0; i <= ySteps; i++) {
+    const v = yMin + (yMax - yMin) * i / ySteps;
+    const y = toY(v);
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '9px IBM Plex Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(Math.round(v), PAD_L - 6, y + 3);
+  }
+
+  // 센서 측정 범위 표시 (400~600)
+  const yH = toY(SENSOR_MAX), yL = toY(SENSOR_MIN);
+  if (yH < H && yL > 0) {
+    ctx.fillStyle = 'rgba(88,166,255,.05)';
+    ctx.fillRect(PAD_L, yH, gW, yL - yH);
+    ctx.strokeStyle = 'rgba(88,166,255,.2)';
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PAD_L, yH); ctx.lineTo(W-PAD_R, yH); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(PAD_L, yL); ctx.lineTo(W-PAD_R, yL); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 파형 그리기 (그라데이션 채우기)
+  const grad = ctx.createLinearGradient(0, PAD_T, 0, PAD_T + gH);
+  grad.addColorStop(0,   'rgba(255,107,107,.5)');
+  grad.addColorStop(.5,  'rgba(255,107,107,.15)');
+  grad.addColorStop(1,   'rgba(255,107,107,.0)');
+
+  ctx.beginPath();
+  disp.forEach((d, i) => {
+    const x = toX(i), y = toY(d.raw);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo(toX(disp.length-1), PAD_T + gH);
+  ctx.lineTo(toX(0), PAD_T + gH);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.beginPath();
+  disp.forEach((d, i) => {
+    const x = toX(i), y = toY(d.raw);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#ff6b6b';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // 최신 점
+  const last = disp[disp.length-1];
+  ctx.beginPath();
+  ctx.arc(toX(disp.length-1), toY(last.raw), 4, 0, Math.PI*2);
+  ctx.fillStyle = '#ff6b6b'; ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // X축 레이블
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '9px IBM Plex Mono, monospace';
+  ctx.textAlign = 'center';
+  const xSteps = 5;
+  for (let i = 0; i <= xSteps; i++) {
+    const idx = Math.round((disp.length - 1) * i / xSteps);
+    const x = toX(idx);
+    ctx.fillText(disp[idx].elapsed.toFixed(1) + 's', x, H - PAD_B + 14);
+  }
+}
+
+// ──────────────────────────────────────────────
+//  렌더링 분리: 데이터 수신은 즉시, 화면 갱신은 rAF에서만
+//  ┌ processLine()  → data[] 에 push만 (DOM 건드리지 않음)
+//  ├ renderLoop()   → rAF(~60fps): 그래프 다시 그리기
+//  └ uiTick()       → 500ms setInterval: 통계·표·수치 업데이트
+// ──────────────────────────────────────────────
+
+// ── 통계 누적 (DOM 없음) ──
+function accumStats(raw) {
+  if (raw < minVal) minVal = raw;
+  if (raw > maxVal) maxVal = raw;
+  sumVal   += raw;
+  sumSqVal += raw * raw;
+}
+
+// ── 통계 DOM 반영 (uiTick에서만 호출) ──
+function flushStats() {
+  const n = data.length;
+  if (n === 0) return;
+  document.getElementById('statCount').textContent = n;
+  document.getElementById('statMin').textContent   = minVal;
+  document.getElementById('statMax').textContent   = maxVal;
+  document.getElementById('statAvg').textContent   = (sumVal / n).toFixed(1);
+  const variance = sumSqVal/n - (sumVal/n)**2;
+  document.getElementById('statStd').textContent   = variance > 0 ? Math.sqrt(variance).toFixed(1) : '0.0';
+  if (data.length > 0) {
+    const last = data[data.length - 1];
+    document.getElementById('statTime').textContent = last.elapsed.toFixed(1) + ' s';
+  }
+}
+
+// ── 표 일괄 갱신 (uiTick에서만 호출) ──
+let lastRenderedIdx = 0;   // 이미 표에 추가한 마지막 data 인덱스
+let firstRow = true;
+function flushTable() {
+  if (data.length === 0) return;
+  if (firstRow) { tableBody.innerHTML = ''; firstRow = false; }
+
+  // 새로 들어온 행만 처리
+  const newEntries = data.slice(lastRenderedIdx);
+  if (newEntries.length === 0) return;
+
+  // DocumentFragment 로 한 번에 DOM 삽입
+  const frag = document.createDocumentFragment();
+  newEntries.forEach(entry => {
+    const norm = ((entry.raw - SENSOR_MIN) / (SENSOR_MAX - SENSOR_MIN)).toFixed(4);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="idx">${entry.idx}</td>
+      <td>${entry.ts}</td>
+      <td>${entry.elapsed.toFixed(3)}</td>
+      <td class="val">${entry.raw}</td>
+      <td style="color:var(--muted)">${norm}</td>
+    `;
+    frag.prepend(tr);
+  });
+  tableBody.prepend(frag);
+  lastRenderedIdx = data.length;
+
+  // 최대 500행 유지
+  while (tableBody.children.length > 500) tableBody.removeChild(tableBody.lastChild);
+}
+
+// ── 실시간 수치 갱신 (uiTick에서만 호출) ──
+function flushLive() {
+  if (data.length === 0) return;
+  const last = data[data.length - 1];
+  liveValue.textContent = last.raw;
+  const pct = Math.min(100, Math.max(0, ((last.raw - SENSOR_MIN) / (SENSOR_MAX - SENSOR_MIN)) * 100));
+  rangeBar.style.width = pct + '%';
+  chartMeta.textContent = `${data.length} pts | ${last.elapsed.toFixed(1)} s`;
+}
+
+// ── UI 통합 틱 (500ms) ──
+let uiTickId = null;
+function startUiTick() {
+  if (uiTickId) return;
+  uiTickId = setInterval(() => {
+    flushStats();
+    flushTable();
+    flushLive();
+  }, 500);
+}
+function stopUiTick() {
+  if (uiTickId) { clearInterval(uiTickId); uiTickId = null; }
+  // 중지 후 마지막 상태 한 번 더 반영
+  flushStats(); flushTable(); flushLive();
+}
+
+// ── rAF 그래프 루프 (~60fps) ──
+let rafId = null;
+let chartDirty = false;   // 새 데이터가 들어왔을 때만 실제로 다시 그림
+function renderLoop() {
+  if (chartDirty) {
+    drawChart();
+    chartDirty = false;
+  }
+  rafId = requestAnimationFrame(renderLoop);
+}
+function startRenderLoop() { if (!rafId) rafId = requestAnimationFrame(renderLoop); }
+function stopRenderLoop()  { if (rafId)  { cancelAnimationFrame(rafId); rafId = null; } drawChart(); }
+
+// ──────────────────────────────────────────────
+//  데이터 처리 (한 줄) — DOM 조작 없음
+// ──────────────────────────────────────────────
+let buffer = '';
+// 실제 측정 간격 검증용
+let prevLineTime = null;
+let intervalAccum = 0, intervalCount = 0;
+
+function processLine(line) {
+  const prefix = document.getElementById('prefix').value || 'SENSOR:';
+  if (!line.startsWith(prefix)) return;
+  const rawStr = line.slice(prefix.length).trim();
+  const raw = parseInt(rawStr, 10);
+  if (isNaN(raw)) return;
+
+  const now = Date.now();
+
+  // 실제 수신 간격 측정 (로그용)
+  if (prevLineTime !== null) {
+    const interval = now - prevLineTime;
+    intervalAccum += interval;
+    intervalCount++;
+    // 200개 수신마다 평균 간격 로그
+    if (intervalCount % 200 === 0) {
+      const avg = (intervalAccum / intervalCount).toFixed(1);
+      log(`수신 간격 평균: ${avg} ms (최근 ${intervalCount}개 기준) — 설정값 50 ms`, 'info');
+    }
+  }
+  prevLineTime = now;
+
+  if (!startTime) startTime = now;
+  const elapsed = (now - startTime) / 1000;
+  const d = new Date(now);
+  const ts = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+  const entry = { idx: data.length + 1, ts, elapsed, raw, norm: (raw - SENSOR_MIN) / (SENSOR_MAX - SENSOR_MIN) };
+  data.push(entry);
+  chartData.push(entry);
+  accumStats(raw);
+  chartDirty = true;   // rAF 루프에 "다시 그려라" 신호만 보냄
+}
+
+// ──────────────────────────────────────────────
+//  Web Serial 읽기 루프
+// ──────────────────────────────────────────────
+async function readLoop() {
+  const decoder = new TextDecoder();
+  while (readLoopRunning && reader) {
+    try {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (recording) processLine(line);
+      }
+    } catch (e) {
+      if (readLoopRunning) log('읽기 오류: ' + e.message, 'err');
+      break;
+    }
+  }
+}
+
+// ──────────────────────────────────────────────
+//  연결
+// ──────────────────────────────────────────────
+btnConnect.addEventListener('click', async () => {
+  if (!('serial' in navigator)) {
+    log('Web Serial API를 지원하지 않는 브라우저입니다. Chrome 89+ 를 사용하세요.', 'err');
+    alert('Chrome 89 이상에서만 지원됩니다.');
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort();
+    const baud = parseInt(document.getElementById('baudRate').value);
+    await port.open({ baudRate: baud });
+    log(`포트 연결 완료 (${baud} baud)`, 'ok');
+
+    reader = port.readable.getReader();
+    readLoopRunning = true;
+    recording = true;
+    prevLineTime = null; intervalAccum = 0; intervalCount = 0;
+    readLoop();
+    startRenderLoop();
+    startUiTick();
+
+    statusBadge.textContent = '수집 중';
+    statusBadge.className   = 'status-badge recording';
+    logoDot.className = 'logo-dot active';
+
+    btnConnect.disabled  = true;
+    btnStop.disabled     = false;
+    btnClear.disabled    = false;
+    btnDownload.disabled = false;
+
+    log('데이터 수집을 시작합니다.', 'ok');
+  } catch (e) {
+    log('연결 실패: ' + e.message, 'err');
+  }
+});
+
+// ──────────────────────────────────────────────
+//  수집 중지
+// ──────────────────────────────────────────────
+btnStop.addEventListener('click', async () => {
+  recording = false;
+  readLoopRunning = false;
+  stopRenderLoop();
+  stopUiTick();
+  if (reader) { try { await reader.cancel(); reader.releaseLock(); } catch(e){} reader = null; }
+  if (port)   { try { await port.close(); } catch(e){} port = null; }
+
+  statusBadge.textContent = '수집 완료';
+  statusBadge.className   = 'status-badge connected';
+  logoDot.className = 'logo-dot';
+
+  btnConnect.disabled = false;
+  btnStop.disabled    = true;
+
+  // 실제 수신 간격 최종 로그
+  if (intervalCount > 0) {
+    log(`최종 평균 수신 간격: ${(intervalAccum/intervalCount).toFixed(1)} ms (총 ${intervalCount}개 / 설정값 50 ms)`, 'ok');
+  }
+  log(`수집 중지. 총 ${data.length}개 데이터 수집 완료.`, 'warn');
+});
+
+// ──────────────────────────────────────────────
+//  초기화
+// ──────────────────────────────────────────────
+btnClear.addEventListener('click', () => {
+  if (!confirm('수집된 데이터를 모두 삭제하시겠습니까?')) return;
+  data = []; chartData = [];
+  minVal = Infinity; maxVal = -Infinity; sumVal = 0; sumSqVal = 0;
+  startTime = null; firstRow = true;
+  lastRenderedIdx = 0; chartDirty = false;
+  prevLineTime = null; intervalAccum = 0; intervalCount = 0;
+
+  tableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px 0;font-family:var(--sans)">데이터가 초기화되었습니다.</td></tr>';
+  liveValue.textContent = '—';
+  rangeBar.style.width  = '0%';
+  chartMeta.textContent = '대기 중...';
+  ['statCount','statMin','statMax','statAvg','statStd'].forEach(id => document.getElementById(id).textContent = (id==='statCount'?'0':'—'));
+  document.getElementById('statTime').textContent = '0.0 s';
+  drawChart();
+  log('데이터 초기화 완료.', 'warn');
+});
+
+// ──────────────────────────────────────────────
+//  CSV 다운로드
+// ──────────────────────────────────────────────
+btnDownload.addEventListener('click', () => {
+  if (data.length === 0) { alert('다운로드할 데이터가 없습니다.'); return; }
+  const BOM = '\uFEFF';
+  const header = '번호,시각(hh:mm:ss.ms),경과시간(s),광혈류량(ADC),정규화값\n';
+  const rows   = data.map(d =>
+    `${d.idx},${d.ts},${d.elapsed.toFixed(3)},${d.raw},${d.norm.toFixed(4)}`
+  ).join('\n');
+  const blob = new Blob([BOM + header + rows], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const now  = new Date();
+  const fname = `PPG_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}.csv`;
+  a.href = url; a.download = fname; a.click();
+  URL.revokeObjectURL(url);
+  log(`CSV 저장: ${fname} (${data.length}행)`, 'ok');
+});
+
+// ──────────────────────────────────────────────
+//  초기 그래프 (연결 전 빈 캔버스만 한 번 그림)
+// ──────────────────────────────────────────────
+setTimeout(drawChart, 200);
+// ※ rAF 렌더 루프는 [포트 연결] 시 startRenderLoop()로 시작됨
+
+log('시스템 준비 완료. Chrome 브라우저에서 [포트 연결]을 클릭하세요.', 'info');
+</script>
+</body>
+</html>
