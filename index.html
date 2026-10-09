@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>관저 심박수 측정실험 — 광혈류 데이터 수집</title>
+<title>관저고 심박수 측정실험 — 광혈류 데이터 수집</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap');
 
@@ -293,7 +293,7 @@
 <header>
   <div class="logo">
     <div class="logo-dot" id="logoDot"></div>
-    관저 심박수 측정실험 &nbsp;·&nbsp; 광혈류(PPG) 데이터 수집
+    관저고 심박수 측정실험 &nbsp;·&nbsp; 광혈류(PPG) 데이터 수집
   </div>
   <div class="header-right">
     <span class="status-badge" id="statusBadge">연결 안 됨</span>
@@ -316,7 +316,7 @@
           <div class="range-bar-bg">
             <div class="range-bar-fill" id="rangeBar"></div>
           </div>
-          <div class="range-labels"><span>400</span><span>600</span></div>
+          <div class="range-labels"><span>0</span><span>1023</span></div>
         </div>
       </div>
     </div>
@@ -330,9 +330,17 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             포트 연결
           </button>
+          <button class="btn btn-primary" id="btnStart" disabled style="background:var(--green);border-color:var(--green)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            측정 시작
+          </button>
+          <button class="btn btn-ghost" id="btnPause" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            측정 일시정지
+          </button>
           <button class="btn btn-danger" id="btnStop" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-            수집 중지
+            측정 종료
           </button>
           <button class="btn btn-ghost" id="btnClear" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
@@ -369,9 +377,9 @@
         <div class="config-row">
           <span class="config-label">Y축 고정 범위</span>
           <div style="display:flex;gap:6px;align-items:center">
-            <input class="config-input" type="number" id="yAxisMin" value="450" style="width:80px" placeholder="최솟값">
+            <input class="config-input" type="number" id="yAxisMin" value="470" style="width:80px" placeholder="최솟값">
             <span style="color:var(--muted);font-size:12px">~</span>
-            <input class="config-input" type="number" id="yAxisMax" value="600" style="width:80px" placeholder="최댓값">
+            <input class="config-input" type="number" id="yAxisMax" value="550" style="width:80px" placeholder="최댓값">
           </div>
         </div>
       </div>
@@ -465,11 +473,13 @@
 //  상태
 // ──────────────────────────────────────────────
 let port = null, reader = null, readLoopRunning = false;
-let recording = false;
-let data = [];          // {t, elapsed, raw, norm}
-let startTime = null;
+let connected  = false;   // 포트가 열려 있는가
+let measuring  = false;   // 측정 시작 후 활성 상태인가
+let paused     = false;   // 일시정지 상태인가
+let recording  = false;   // 실제로 데이터를 data[]에 쌓는가 (measuring && !paused)
+let data = [];
+let startTime  = null;
 let minVal = Infinity, maxVal = -Infinity, sumVal = 0, sumSqVal = 0;
-let timerInterval = null;
 
 const SENSOR_MIN = 400, SENSOR_MAX = 600;
 
@@ -477,6 +487,8 @@ const SENSOR_MIN = 400, SENSOR_MAX = 600;
 //  DOM refs
 // ──────────────────────────────────────────────
 const btnConnect  = document.getElementById('btnConnect');
+const btnStart    = document.getElementById('btnStart');
+const btnPause    = document.getElementById('btnPause');
 const btnStop     = document.getElementById('btnStop');
 const btnClear    = document.getElementById('btnClear');
 const btnDownload = document.getElementById('btnDownload');
@@ -686,17 +698,32 @@ function flushTable() {
   while (tableBody.children.length > 500) tableBody.removeChild(tableBody.lastChild);
 }
 
-// ── 실시간 수치 갱신 (uiTick에서만 호출) ──
+// ── 실시간 수치 갱신 (liveOnlyTick / uiTick 에서 호출) ──
+let lastLiveRaw = null;   // 포트 연결 직후부터 최신 raw 값을 유지
 function flushLive() {
-  if (data.length === 0) return;
-  const last = data[data.length - 1];
-  liveValue.textContent = last.raw;
-  const pct = Math.min(100, Math.max(0, ((last.raw - SENSOR_MIN) / (SENSOR_MAX - SENSOR_MIN)) * 100));
-  rangeBar.style.width = pct + '%';
-  chartMeta.textContent = `${data.length} pts | ${last.elapsed.toFixed(1)} s`;
+  // 포트 연결 상태에서는 lastLiveRaw 로 항상 표시
+  if (lastLiveRaw !== null) {
+    liveValue.textContent = lastLiveRaw;
+    const pct = Math.min(100, Math.max(0, (lastLiveRaw / 1023) * 100));
+    rangeBar.style.width = pct + '%';
+  }
+  if (data.length > 0) {
+    const last = data[data.length - 1];
+    chartMeta.textContent = `${data.length} pts | ${last.elapsed.toFixed(1)} s`;
+  }
 }
 
-// ── UI 통합 틱 (500ms) ──
+// ── 포트 연결 직후 실시간 수치만 갱신 (측정 시작 전) ──
+let liveOnlyTickId = null;
+function startLiveOnlyTick() {
+  if (liveOnlyTickId) return;
+  liveOnlyTickId = setInterval(flushLive, 200);  // 200ms — 수치 표시용만
+}
+function stopLiveOnlyTick() {
+  if (liveOnlyTickId) { clearInterval(liveOnlyTickId); liveOnlyTickId = null; }
+}
+
+// ── UI 통합 틱 (500ms) — 측정 중에만 동작 ──
 let uiTickId = null;
 function startUiTick() {
   if (uiTickId) return;
@@ -708,7 +735,6 @@ function startUiTick() {
 }
 function stopUiTick() {
   if (uiTickId) { clearInterval(uiTickId); uiTickId = null; }
-  // 중지 후 마지막 상태 한 번 더 반영
   flushStats(); flushTable(); flushLive();
 }
 
@@ -741,6 +767,7 @@ function processLine(line) {
   if (isNaN(raw)) return;
 
   const now = Date.now();
+  lastLiveRaw = raw;   // 포트 연결 직후 수치 표시용 (recording 무관)
 
   // 실제 수신 간격 측정 (로그용)
   if (prevLineTime !== null) {
@@ -755,6 +782,9 @@ function processLine(line) {
   }
   prevLineTime = now;
 
+  // recording 상태일 때만 data[]에 쌓음
+  if (!recording) return;
+
   if (!startTime) startTime = now;
   const elapsed = (now - startTime) / 1000;
   const d = new Date(now);
@@ -763,7 +793,7 @@ function processLine(line) {
   data.push(entry);
   chartData.push(entry);
   accumStats(raw);
-  chartDirty = true;   // rAF 루프에 "다시 그려라" 신호만 보냄
+  chartDirty = true;
 }
 
 // ──────────────────────────────────────────────
@@ -780,7 +810,7 @@ async function readLoop() {
       while ((idx = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, idx).trim();
         buffer = buffer.slice(idx + 1);
-        if (recording) processLine(line);
+        processLine(line);
       }
     } catch (e) {
       if (readLoopRunning) log('읽기 오류: ' + e.message, 'err');
@@ -790,7 +820,28 @@ async function readLoop() {
 }
 
 // ──────────────────────────────────────────────
-//  연결
+//  버튼 상태 관리 헬퍼
+// ──────────────────────────────────────────────
+function setButtonState(state) {
+  // state: 'idle' | 'connected' | 'measuring' | 'paused' | 'stopped'
+  btnConnect.disabled  = (state !== 'idle');
+  btnStart.disabled    = !(state === 'connected' || state === 'stopped');
+  btnPause.disabled    = !(state === 'measuring' || state === 'paused');
+  btnStop.disabled     = !(state === 'measuring' || state === 'paused');
+  btnClear.disabled    = (state === 'idle');
+  btnDownload.disabled = (state === 'idle' || state === 'connected');
+
+  // 일시정지 버튼 텍스트 (텍스트노드만 교체)
+  const pauseText = state === 'paused' ? '측정 재개' : '측정 일시정지';
+  // 마지막 텍스트노드 찾아서 교체
+  for (let i = btnPause.childNodes.length - 1; i >= 0; i--) {
+    const n = btnPause.childNodes[i];
+    if (n.nodeType === 3 && n.textContent.trim()) { n.textContent = ' ' + pauseText; break; }
+  }
+}
+
+// ──────────────────────────────────────────────
+//  포트 연결
 // ──────────────────────────────────────────────
 btnConnect.addEventListener('click', async () => {
   if (!('serial' in navigator)) {
@@ -806,54 +857,97 @@ btnConnect.addEventListener('click', async () => {
 
     reader = port.readable.getReader();
     readLoopRunning = true;
-    recording = true;
+    connected = true; measuring = false; paused = false; recording = false;
     prevLineTime = null; intervalAccum = 0; intervalCount = 0;
     readLoop();
-    startRenderLoop();
-    startUiTick();
 
-    statusBadge.textContent = '수집 중';
-    statusBadge.className   = 'status-badge recording';
+    // 포트 연결 직후 — 실시간 측정값만 표시 (측정 시작 전)
+    startLiveOnlyTick();
+
+    statusBadge.textContent = '연결됨';
+    statusBadge.className   = 'status-badge connected';
     logoDot.className = 'logo-dot active';
 
-    btnConnect.disabled  = true;
-    btnStop.disabled     = false;
-    btnClear.disabled    = false;
-    btnDownload.disabled = false;
-
-    log('데이터 수집을 시작합니다.', 'ok');
+    setButtonState('connected');
+    log('포트 연결 완료. [측정 시작]을 눌러 데이터 수집을 시작하세요.', 'ok');
   } catch (e) {
     log('연결 실패: ' + e.message, 'err');
   }
 });
 
 // ──────────────────────────────────────────────
-//  수집 중지
+//  측정 시작
 // ──────────────────────────────────────────────
-btnStop.addEventListener('click', async () => {
-  recording = false;
-  readLoopRunning = false;
-  stopRenderLoop();
-  stopUiTick();
-  if (reader) { try { await reader.cancel(); reader.releaseLock(); } catch(e){} reader = null; }
-  if (port)   { try { await port.close(); } catch(e){} port = null; }
+btnStart.addEventListener('click', () => {
+  // 데이터 초기화 (재시작 포함)
+  data = []; chartData = [];
+  minVal = Infinity; maxVal = -Infinity; sumVal = 0; sumSqVal = 0;
+  startTime = null; firstRow = true; lastRenderedIdx = 0; chartDirty = false;
+  prevLineTime = null; intervalAccum = 0; intervalCount = 0;
+  tableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px 0;font-family:var(--sans)">데이터 수집 중...</td></tr>';
+  ['statCount','statMin','statMax','statAvg','statStd'].forEach(id => document.getElementById(id).textContent = (id==='statCount'?'0':'—'));
+  document.getElementById('statTime').textContent = '0.0 s';
+  chartMeta.textContent = '측정 중...';
 
-  statusBadge.textContent = '수집 완료';
-  statusBadge.className   = 'status-badge connected';
-  logoDot.className = 'logo-dot';
+  measuring = true; paused = false; recording = true;
+  stopLiveOnlyTick();       // 수치 전용 틱 끄고
+  startRenderLoop();         // 그래프 루프 시작
+  startUiTick();             // 통합 UI 틱 시작
 
-  btnConnect.disabled = false;
-  btnStop.disabled    = true;
+  statusBadge.textContent = '측정 중';
+  statusBadge.className   = 'status-badge recording';
+  logoDot.className = 'logo-dot active';
 
-  // 실제 수신 간격 최종 로그
-  if (intervalCount > 0) {
-    log(`최종 평균 수신 간격: ${(intervalAccum/intervalCount).toFixed(1)} ms (총 ${intervalCount}개 / 설정값 50 ms)`, 'ok');
-  }
-  log(`수집 중지. 총 ${data.length}개 데이터 수집 완료.`, 'warn');
+  setButtonState('measuring');
+  log('측정 시작. 데이터 수집 중...', 'ok');
 });
 
 // ──────────────────────────────────────────────
-//  초기화
+//  측정 일시정지 / 재개
+// ──────────────────────────────────────────────
+btnPause.addEventListener('click', () => {
+  if (!measuring) return;
+  paused = !paused;
+  recording = !paused;
+
+  if (paused) {
+    statusBadge.textContent = '일시정지';
+    statusBadge.className   = 'status-badge connected';
+    setButtonState('paused');
+    log('측정 일시정지.', 'warn');
+  } else {
+    statusBadge.textContent = '측정 중';
+    statusBadge.className   = 'status-badge recording';
+    setButtonState('measuring');
+    log('측정 재개.', 'ok');
+  }
+});
+
+// ──────────────────────────────────────────────
+//  측정 종료 (포트는 유지)
+// ──────────────────────────────────────────────
+btnStop.addEventListener('click', () => {
+  measuring = false; paused = false; recording = false;
+  stopRenderLoop();
+  stopUiTick();
+
+  // 포트는 살아있으므로 liveOnlyTick 재시작 (수치만 표시)
+  startLiveOnlyTick();
+
+  statusBadge.textContent = '측정 완료';
+  statusBadge.className   = 'status-badge connected';
+  logoDot.className = 'logo-dot';
+
+  setButtonState('stopped');
+
+  if (intervalCount > 0) {
+    log(`평균 수신 간격: ${(intervalAccum/intervalCount).toFixed(1)} ms (총 ${intervalCount}개 / 설정값 50 ms)`, 'ok');
+  }
+  log(`측정 종료. 총 ${data.length}개 데이터 수집 완료. [측정 시작]으로 재수집 가능.`, 'warn');
+});
+
+// ──────────────────────────────────────────────
+//  데이터 초기화
 // ──────────────────────────────────────────────
 btnClear.addEventListener('click', () => {
   if (!confirm('수집된 데이터를 모두 삭제하시겠습니까?')) return;
@@ -864,9 +958,7 @@ btnClear.addEventListener('click', () => {
   prevLineTime = null; intervalAccum = 0; intervalCount = 0;
 
   tableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px 0;font-family:var(--sans)">데이터가 초기화되었습니다.</td></tr>';
-  liveValue.textContent = '—';
-  rangeBar.style.width  = '0%';
-  chartMeta.textContent = '대기 중...';
+  chartMeta.textContent = connected ? (measuring ? '측정 중...' : '포트 연결됨') : '대기 중...';
   ['statCount','statMin','statMax','statAvg','statStd'].forEach(id => document.getElementById(id).textContent = (id==='statCount'?'0':'—'));
   document.getElementById('statTime').textContent = '0.0 s';
   drawChart();
@@ -894,10 +986,10 @@ btnDownload.addEventListener('click', () => {
 });
 
 // ──────────────────────────────────────────────
-//  초기 그래프 (연결 전 빈 캔버스만 한 번 그림)
+//  초기화 — 페이지 로드 시 버튼 상태 설정
 // ──────────────────────────────────────────────
+setButtonState('idle');
 setTimeout(drawChart, 200);
-// ※ rAF 렌더 루프는 [포트 연결] 시 startRenderLoop()로 시작됨
 
 log('시스템 준비 완료. Chrome 브라우저에서 [포트 연결]을 클릭하세요.', 'info');
 </script>
